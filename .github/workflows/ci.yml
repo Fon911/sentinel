@@ -1,0 +1,48 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5401:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - name: Установить goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+
+      - name: Миграции
+        run: goose -dir migrations postgres "postgres://postgres:secret@localhost:5401/postgres" up
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Тесты
+        run: go test ./... -race

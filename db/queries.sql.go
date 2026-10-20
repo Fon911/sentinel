@@ -26,3 +26,22 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (int64, 
 	err := row.Scan(&id)
 	return id, err
 }
+
+const getUserByEmail = `-- name: GetUserByEmail :one
+SELECT id,
+  password_hash
+FROM users
+WHERE email = $1
+`
+
+type GetUserByEmailRow struct {
+	ID           int64
+	PasswordHash string
+}
+
+func (q *Queries) GetUserByEmail(ctx context.Context, email string) (GetUserByEmailRow, error) {
+	row := q.db.QueryRow(ctx, getUserByEmail, email)
+	var i GetUserByEmailRow
+	err := row.Scan(&i.ID, &i.PasswordHash)
+	return i, err
+}

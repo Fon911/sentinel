@@ -9,6 +9,7 @@ import (
 	"github.com/Fon911/sentinel/internal/handler"
 	"github.com/Fon911/sentinel/internal/storage"
 	"github.com/go-chi/chi/v5"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -29,7 +30,18 @@ func main() {
 	handler.Pool = pool
 	defer pool.Close()
 	fmt.Println("база подключена")
-
+	addr := os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		addr = "localhost:6379"
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	handler.RDB = rdb
+	rt.Post("/auth/login", handler.Login)
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		secret = "dev-only-secret"
+	}
+	handler.Secret = secret
 	err = http.ListenAndServe(":8000", rt)
 	if err != nil {
 		fmt.Println(err)

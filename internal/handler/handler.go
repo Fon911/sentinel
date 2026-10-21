@@ -8,9 +8,12 @@ import (
 
 	"github.com/Fon911/sentinel/internal/service"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 var Pool *pgxpool.Pool
+var RDB *redis.Client
+var Secret string
 
 type RegisterRequest struct {
 	Email    string `json:"email"`
@@ -21,6 +24,14 @@ type RegisterResponse struct {
 }
 type HealthResponse struct {
 	Status string `json:"status"`
+}
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+type LoginResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 func Health(w http.ResponseWriter, r *http.Request) {
@@ -67,4 +78,35 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(RegisterResponse{ID: id})
+}
+
+func Login(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "кривой JSON")
+		return
+	}
+	if req.Email == "" || req.Password == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "нужно поле Email или Password")
+		return
+	}
+	access, refresh, err := service.Login(r.Context(), Pool, RDB, req.Email, req.Password, Secret)
+	if errors.Is(err, service.ErrInvalidCredentials) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintln(w, "неверный пароль или email")
+		return
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(w, "ошибка сервера")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(LoginResponse{AccessToken: access, RefreshToken: refresh})
+
 }

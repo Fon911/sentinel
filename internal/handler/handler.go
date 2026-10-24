@@ -34,6 +34,17 @@ type LoginResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+type MeResponse struct {
+	ID int64 `json:"id"`
+}
+
+func Me(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(userIDKey).(int64)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(MeResponse{ID: userID})
+}
+
 func Health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

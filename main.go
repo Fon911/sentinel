@@ -16,6 +16,10 @@ func main() {
 	rt := chi.NewRouter()
 	rt.Post("/auth/register", handler.Register)
 	rt.Get("/health", handler.Health)
+	rt.Group(func(r chi.Router) {
+		r.Use(handler.AuthMiddleware)
+		r.Get("/me", handler.Me)
+	})
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -35,12 +39,17 @@ func main() {
 		addr = "localhost:6379"
 	}
 	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		fmt.Println("редис недоступен:", err)
+		return
+	}
 	handler.RDB = rdb
 	rt.Post("/auth/login", handler.Login)
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		secret = "dev-only-secret"
 	}
+
 	handler.Secret = secret
 	err = http.ListenAndServe(":8000", rt)
 	if err != nil {

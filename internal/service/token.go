@@ -49,3 +49,17 @@ func ParseAccessToken(raw string, secret string) (int64, error) {
 	}
 	return num, nil
 }
+
+func ParseRefreshToken(raw string, secret string) (int64, string, error) {
+	parsed := &jwt.RegisteredClaims{}
+	_, err := jwt.ParseWithClaims(raw, parsed, func(t *jwt.Token) (any, error) { return []byte(secret), nil }, jwt.WithValidMethods([]string{"HS256"}))
+	if err != nil {
+		return 0, "", ErrInvalidToken
+	}
+	num, err := strconv.ParseInt(parsed.Subject, 10, 64)
+
+	if err != nil {
+		return 0, "", ErrInvalidToken
+	}
+	return num, parsed.ID, nil
+}

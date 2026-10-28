@@ -20,6 +20,7 @@ func main() {
 		r.Use(handler.AuthMiddleware)
 		r.Get("/me", handler.Me)
 	})
+	rt.Post("/auth/refresh", handler.Refresh)
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {

@@ -37,6 +37,9 @@ type LoginResponse struct {
 type MeResponse struct {
 	ID int64 `json:"id"`
 }
+type RefreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
 
 func Me(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(userIDKey).(int64)
@@ -109,6 +112,37 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, service.ErrInvalidCredentials) {
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprintln(w, "неверный пароль или email")
+		return
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(w, "ошибка сервера")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(LoginResponse{AccessToken: access, RefreshToken: refresh})
+
+}
+
+func Refresh(w http.ResponseWriter, r *http.Request) {
+	var req RefreshRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "кривой JSON")
+		return
+	}
+	if req.RefreshToken == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "нужно поле refresh-токен")
+		return
+	}
+	access, refresh, err := service.Refresh(r.Context(), RDB, req.RefreshToken, Secret)
+	if errors.Is(err, service.ErrInvalidToken) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintln(w, "невалидный refresh-токен")
 		return
 	}
 	if err != nil {

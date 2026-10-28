@@ -68,3 +68,35 @@ func Login(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, email, pa
 	}
 	return token, refresh, nil
 }
+
+func Refresh(ctx context.Context, rdb *redis.Client, raw, secret string) (string, string, error) {
+	userID, jti, err := ParseRefreshToken(raw, secret)
+	if err != nil {
+		return "", "", err
+	}
+	err = rdb.Get(ctx, "refresh:"+jti).Err()
+	if errors.Is(err, redis.Nil) {
+		return "", "", ErrInvalidToken
+	} else if err != nil {
+		return "", "", err
+
+	}
+
+	err = rdb.Del(ctx, "refresh:"+jti).Err()
+	if err != nil {
+		return "", "", err
+	}
+	newAccessToken, err := CreateAccessToken(userID, secret, accessTTL)
+	if err != nil {
+		return "", "", err
+	}
+	newRefreshToken, jti, err := CreateRefreshToken(userID, secret, refreshTTL)
+	if err != nil {
+		return "", "", err
+	}
+	err = rdb.Set(ctx, "refresh:"+jti, userID, refreshTTL).Err()
+	if err != nil {
+		return "", "", err
+	}
+	return newAccessToken, newRefreshToken, nil
+}

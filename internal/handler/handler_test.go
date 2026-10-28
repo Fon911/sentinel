@@ -121,6 +121,52 @@ func TestLogin(t *testing.T) {
 
 }
 
+func TestMe(t *testing.T) {
+	setupPool(t)
+	rt := chi.NewRouter()
+	rt.Group(func(r chi.Router) {
+		r.Use(AuthMiddleware)
+		r.Get("/me", Me)
+	})
+	raw, err := service.CreateAccessToken(42, Secret, time.Minute)
+	if err != nil {
+		t.Fatalf("токен: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		header string
+		code   int
+	}{
+		{"валидный", "Bearer " + raw, 200},
+		{"без заголовка", "", 401},
+		{"Bearer мусор", "Bearer Musor", 401},
+	}
+	for _, tc := range tests {
+
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/me", nil)
+			if tc.header != "" {
+				req.Header.Set("Authorization", tc.header)
+			}
+			rec := httptest.NewRecorder()
+
+			rt.ServeHTTP(rec, req)
+
+			if rec.Code != tc.code {
+				t.Errorf("статус: got %d, want %d;", rec.Code, tc.code)
+			}
+			if tc.code == 200 {
+				if !strings.Contains(rec.Body.String(), `"id":42`) {
+					t.Errorf("в ответе нет id 42 - : %s", rec.Body.String())
+				}
+
+			}
+		})
+	}
+
+}
+
 func setupPool(t *testing.T) {
 	t.Helper()
 	if Pool != nil {

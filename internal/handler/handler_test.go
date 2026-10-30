@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -185,4 +186,72 @@ func setupPool(t *testing.T) {
 	}
 	Pool = pool
 
+}
+
+func TestRefresh(t *testing.T) {
+	rt := chi.NewRouter()
+	setupPool(t)
+
+	email := fmt.Sprintf("u%d@test.io", time.Now().UnixNano())
+	_, err := service.Register(context.Background(), Pool, email, "longenough1")
+	if err != nil {
+		t.Fatalf("подготовка: %v", err)
+	}
+	okBody := fmt.Sprintf(`{"email":%q,"password":"longenough1"}`, email)
+
+	body := strings.NewReader(okBody)
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", body)
+	rec := httptest.NewRecorder()
+	rt.Post("/auth/login", Login)
+	rt.Post("/auth/refresh", Refresh)
+
+	rt.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("Логин не удался ")
+	}
+	var resp LoginResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("декод ответа: %v", err)
+	}
+	refreshBody := fmt.Sprintf(`{"refresh_token":%q}`, resp.RefreshToken)
+
+	t.Run("Валидный", func(t *testing.T) {
+		testReq := httptest.NewRequest(http.MethodPost, "/auth/refresh", strings.NewReader(refreshBody))
+		testRec := httptest.NewRecorder()
+		rt.ServeHTTP(testRec, testReq)
+		if testRec.Code != 200 {
+			t.Errorf("code:%d нужен 200", testRec.Code)
+		}
+		if testRec.Code == 200 {
+			if !strings.Contains(testRec.Body.String(), `"access_token"`) {
+				t.Errorf("в ответе нет access_token: %s", testRec.Body.String())
+			}
+			if !strings.Contains(testRec.Body.String(), `"refresh_token"`) {
+				t.Errorf("в ответе нет refresh_token: %s", testRec.Body.String())
+			}
+
+		}
+
+	})
+
+	t.Run("Мусор", func(t *testing.T) {
+		testReq := httptest.NewRequest(http.MethodPost, "/auth/refresh", strings.NewReader(`{"refresh_token":"abc"}`))
+		testRec := httptest.NewRecorder()
+		rt.ServeHTTP(testRec, testReq)
+		if testRec.Code != 401 {
+			t.Errorf("code:%d нужен 401", testRec.Code)
+		}
+
+	})
+
+	t.Run("Повторный", func(t *testing.T) {
+		testReq := httptest.NewRequest(http.MethodPost, "/auth/refresh", strings.NewReader(refreshBody))
+		testRec := httptest.NewRecorder()
+		rt.ServeHTTP(testRec, testReq)
+		if testRec.Code != 401 {
+			t.Errorf("code:%d нужен 401", testRec.Code)
+		}
+
+	})
 }

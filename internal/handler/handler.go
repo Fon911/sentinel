@@ -145,6 +145,11 @@ func Refresh(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "невалидный refresh-токен")
 		return
 	}
+	if errors.Is(err, service.ErrTokenReused) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintln(w, "сессии отозваны, войдите заново")
+		return
+	}
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintln(w, "ошибка сервера")
@@ -154,4 +159,31 @@ func Refresh(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(LoginResponse{AccessToken: access, RefreshToken: refresh})
 
+}
+
+func Logout(w http.ResponseWriter, r *http.Request) {
+	var req RefreshRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "кривой JSON")
+		return
+	}
+	if req.RefreshToken == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "нужно поле refresh-токен")
+		return
+	}
+	err = service.Logout(r.Context(), RDB, req.RefreshToken, Secret)
+	if errors.Is(err, service.ErrInvalidToken) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintln(w, "невалидный refresh-токен")
+		return
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

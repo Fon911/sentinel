@@ -21,6 +21,7 @@ func main() {
 		r.Get("/me", handler.Me)
 	})
 	rt.Post("/auth/refresh", handler.Refresh)
+	rt.Post("/auth/logout", handler.Logout)
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {

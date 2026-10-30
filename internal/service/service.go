@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/Fon911/sentinel/internal/storage"
@@ -13,6 +14,7 @@ import (
 
 var ErrWeakPassword = errors.New("пароль короче 8 - отказ")
 var ErrEmailTaken = storage.ErrEmailTaken
+var ErrTokenReused = errors.New("Токен переиспользуеться те украден")
 
 func Register(ctx context.Context, pool *pgxpool.Pool, email string, password string) (int64, error) {
 	if len(password) < 8 {
@@ -66,6 +68,15 @@ func Login(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, email, pa
 	if err != nil {
 		return "", "", err
 	}
+	indexKey := "sessions:" + strconv.FormatInt(id, 10)
+	err = rdb.SAdd(ctx, indexKey, jti).Err()
+	if err != nil {
+		return "", "", err
+	}
+	err = rdb.Expire(ctx, indexKey, refreshTTL).Err()
+	if err != nil {
+		return "", "", err
+	}
 	return token, refresh, nil
 }
 
@@ -74,15 +85,34 @@ func Refresh(ctx context.Context, rdb *redis.Client, raw, secret string) (string
 	if err != nil {
 		return "", "", err
 	}
+	indexKey := "sessions:" + strconv.FormatInt(userID, 10)
 	err = rdb.Get(ctx, "refresh:"+jti).Err()
 	if errors.Is(err, redis.Nil) {
-		return "", "", ErrInvalidToken
+		jtis, err := rdb.SMembers(ctx, indexKey).Result()
+		if err != nil {
+			return "", "", err
+		}
+		for _, j := range jtis {
+			err = rdb.Del(ctx, "refresh:"+j).Err()
+			if err != nil {
+				return "", "", err
+			}
+		}
+		err = rdb.Del(ctx, indexKey).Err()
+		if err != nil {
+			return "", "", err
+		}
+		return "", "", ErrTokenReused
 	} else if err != nil {
 		return "", "", err
 
 	}
 
 	err = rdb.Del(ctx, "refresh:"+jti).Err()
+	if err != nil {
+		return "", "", err
+	}
+	err = rdb.SRem(ctx, indexKey, jti).Err()
 	if err != nil {
 		return "", "", err
 	}
@@ -98,5 +128,31 @@ func Refresh(ctx context.Context, rdb *redis.Client, raw, secret string) (string
 	if err != nil {
 		return "", "", err
 	}
+	err = rdb.SAdd(ctx, indexKey, jti).Err()
+	if err != nil {
+		return "", "", err
+	}
+	err = rdb.Expire(ctx, indexKey, refreshTTL).Err()
+	if err != nil {
+		return "", "", err
+	}
 	return newAccessToken, newRefreshToken, nil
+}
+
+func Logout(ctx context.Context, rdb *redis.Client, raw, secret string) error {
+	userID, jti, err := ParseRefreshToken(raw, secret)
+	if err != nil {
+		return ErrInvalidToken
+	}
+	indexKey := "sessions:" + strconv.FormatInt(userID, 10)
+	err = rdb.Del(ctx, "refresh:"+jti).Err()
+	if err != nil {
+		return err
+	}
+	err = rdb.SRem(ctx, indexKey, jti).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

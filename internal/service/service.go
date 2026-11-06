@@ -34,26 +34,57 @@ func Register(ctx context.Context, pool *pgxpool.Pool, email string, password st
 }
 
 var ErrInvalidCredentials = errors.New("неверный email или пароль")
+var ErrTooManyAttempts = errors.New("слишком много попыток, подожди 15 минут")
 
 const (
 	accessTTL  = 15 * time.Minute
 	refreshTTL = 7 * 24 * time.Hour
 )
 
+func addFailedAttempt(ctx context.Context, rdb *redis.Client, key string) error {
+	n, err := rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return err
+	}
+	if n == 1 {
+		if err := rdb.Expire(ctx, key, time.Minute*15).Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func Login(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, email, password, secret string) (string, string, error) {
+	key := "login_attempts:" + email
+	n, err := rdb.Get(ctx, key).Int()
+	if errors.Is(err, redis.Nil) {
+		// полки нет — неудач не было, едем дальше
+	} else if err != nil {
+		return "", "", err
+	}
+	if n >= 5 {
+		return "", "", ErrTooManyAttempts
+	}
 	id, hash, err := storage.GetUserByEmail(ctx, pool, email)
 	if errors.Is(err, storage.ErrUserNotFound) {
+		if err := addFailedAttempt(ctx, rdb, key); err != nil {
+			return "", "", err
+		}
 		return "", "", ErrInvalidCredentials
-	}
-	if err != nil {
-		return "", "", err
 	}
 	match, err := argon2id.ComparePasswordAndHash(password, hash)
 	if err != nil {
 		return "", "", err
 	}
 	if !match {
+		if err := addFailedAttempt(ctx, rdb, key); err != nil {
+			return "", "", err
+		}
 		return "", "", ErrInvalidCredentials
+	}
+	err = rdb.Del(ctx, key).Err()
+	if err != nil {
+		return "", "", err
 	}
 
 	token, err := CreateAccessToken(id, secret, accessTTL)

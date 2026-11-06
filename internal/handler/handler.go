@@ -109,6 +109,11 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	access, refresh, err := service.Login(r.Context(), Pool, RDB, req.Email, req.Password, Secret)
+	if errors.Is(err, service.ErrTooManyAttempts) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprintln(w, "слишком много попыток, подожди 15 минут")
+		return
+	}
 	if errors.Is(err, service.ErrInvalidCredentials) {
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprintln(w, "неверный пароль или email")

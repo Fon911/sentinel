@@ -255,3 +255,168 @@ func TestRefresh(t *testing.T) {
 
 	})
 }
+
+func TestRateLimit(t *testing.T) {
+	rt := chi.NewRouter()
+	setupPool(t)
+
+	email := fmt.Sprintf("u%d@test.io", time.Now().UnixNano())
+	_, err := service.Register(context.Background(), Pool, email, "longenough1")
+	if err != nil {
+		t.Fatalf("подготовка: %v", err)
+	}
+	okBody := fmt.Sprintf(`{"email":%q,"password":"longenough1"}`, email)
+	wrongBody := fmt.Sprintf(`{"email":%q,"password":"WRONG"}`, email)
+	rt.Post("/auth/login", Login)
+
+	t.Run("Пять промахов", func(t *testing.T) {
+		for i := 0; i < 5; i++ {
+			body := strings.NewReader(wrongBody)
+			req := httptest.NewRequest(http.MethodPost, "/auth/login", body)
+			rec := httptest.NewRecorder()
+			rt.ServeHTTP(rec, req)
+			if rec.Code != 401 {
+				t.Errorf("Want 401 got:%d,попытка:%d", rec.Code, i)
+			}
+		}
+	})
+
+	t.Run("Шестая с верным", func(t *testing.T) {
+		body := strings.NewReader(okBody)
+		req := httptest.NewRequest(http.MethodPost, "/auth/login", body)
+		rec := httptest.NewRecorder()
+		rt.ServeHTTP(rec, req)
+		if rec.Code != 429 {
+			t.Errorf("Want 429 got:%d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "15 минут") {
+			t.Errorf("в теле нет «15 минут», пришло: %s", rec.Body.String())
+		}
+	})
+
+}
+
+func TestLogout(t *testing.T) {
+	rt := chi.NewRouter()
+	setupPool(t)
+
+	email := fmt.Sprintf("u%d@test.io", time.Now().UnixNano())
+	_, err := service.Register(context.Background(), Pool, email, "longenough1")
+	if err != nil {
+		t.Fatalf("подготовка: %v", err)
+	}
+	okBody := fmt.Sprintf(`{"email":%q,"password":"longenough1"}`, email)
+
+	body := strings.NewReader(okBody)
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", body)
+	rec := httptest.NewRecorder()
+	rt.Post("/auth/login", Login)
+	rt.Post("/auth/logout", Logout)
+	rt.Post("/auth/refresh", Refresh)
+
+	rt.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("логин: код %d", rec.Code)
+	}
+	var resp LoginResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("декод ответа: %v", err)
+	}
+	refreshBody := fmt.Sprintf(`{"refresh_token":%q}`, resp.RefreshToken)
+
+	t.Run("Логаут", func(t *testing.T) {
+		testReq := httptest.NewRequest(http.MethodPost, "/auth/logout", strings.NewReader(refreshBody))
+		testRec := httptest.NewRecorder()
+		rt.ServeHTTP(testRec, testReq)
+		if testRec.Code != 204 {
+			t.Errorf("code:%d нужен 204", testRec.Code)
+		}
+
+	})
+
+	t.Run("Рефреш после логаута", func(t *testing.T) {
+
+		testReq := httptest.NewRequest(http.MethodPost, "/auth/refresh", strings.NewReader(refreshBody))
+		testRec := httptest.NewRecorder()
+		rt.ServeHTTP(testRec, testReq)
+		if testRec.Code != 401 {
+			t.Errorf("code:%d нужен 401", testRec.Code)
+		}
+	})
+
+	t.Run("Повторный логаут", func(t *testing.T) {
+		testReq := httptest.NewRequest(http.MethodPost, "/auth/logout", strings.NewReader(refreshBody))
+		testRec := httptest.NewRecorder()
+		rt.ServeHTTP(testRec, testReq)
+		if testRec.Code != 204 {
+			t.Errorf("code:%d нужен 204", testRec.Code)
+		}
+
+	})
+}
+
+func TestReuse(t *testing.T) {
+	rt := chi.NewRouter()
+	setupPool(t)
+
+	email := fmt.Sprintf("u%d@test.io", time.Now().UnixNano())
+	_, err := service.Register(context.Background(), Pool, email, "longenough1")
+	if err != nil {
+		t.Fatalf("подготовка: %v", err)
+	}
+	okBody := fmt.Sprintf(`{"email":%q,"password":"longenough1"}`, email)
+
+	body := strings.NewReader(okBody)
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", body)
+	rec := httptest.NewRecorder()
+	rt.Post("/auth/login", Login)
+	rt.Post("/auth/refresh", Refresh)
+
+	rt.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("Логин не удался ")
+	}
+	var resp LoginResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("декод ответа: %v", err)
+	}
+	refreshBody := fmt.Sprintf(`{"refresh_token":%q}`, resp.RefreshToken)
+	newBody := strings.NewReader(refreshBody)
+	reqReuse := httptest.NewRequest(http.MethodPost, "/auth/refresh", newBody)
+	recReuse := httptest.NewRecorder()
+	rt.ServeHTTP(recReuse, reqReuse)
+	if recReuse.Code != 200 {
+		t.Fatalf("ротация: код %d", recReuse.Code)
+	}
+	var resp2 LoginResponse
+	if err = json.NewDecoder(recReuse.Body).Decode(&resp2); err != nil {
+		t.Fatalf("декод ответа: %v", err)
+	}
+	refreshBody2 := fmt.Sprintf(`{"refresh_token":%q}`, resp2.RefreshToken)
+
+	t.Run("Кража старым токеном»", func(t *testing.T) {
+		testReq := httptest.NewRequest(http.MethodPost, "/auth/refresh", strings.NewReader(refreshBody))
+		testRec := httptest.NewRecorder()
+		rt.ServeHTTP(testRec, testReq)
+		if testRec.Code != 401 {
+			t.Errorf("code:%d нужен 401", testRec.Code)
+
+		}
+		if !strings.Contains(testRec.Body.String(), "сессии отозваны") {
+			t.Errorf("в теле нет «сессии отозваны», пришло: %s", testRec.Body.String())
+		}
+
+	})
+
+	t.Run("Каскад убил пару 2", func(t *testing.T) {
+		testReq := httptest.NewRequest(http.MethodPost, "/auth/refresh", strings.NewReader(refreshBody2))
+		testRec := httptest.NewRecorder()
+		rt.ServeHTTP(testRec, testReq)
+		if testRec.Code != 401 {
+			t.Errorf("code:%d нужен 401", testRec.Code)
+		}
+
+	})
+}

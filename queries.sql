@@ -7,3 +7,11 @@ SELECT id,
   password_hash
 FROM users
 WHERE email = $1;
+-- name: GetEmailByID :one
+SELECT email
+FROM users
+WHERE id = $1;
+-- name: SaveTOTPSecret :exec
+UPDATE users
+SET totp_secret = $2
+WHERE id = $1;

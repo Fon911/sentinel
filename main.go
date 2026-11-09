@@ -19,7 +19,9 @@ func main() {
 	rt.Group(func(r chi.Router) {
 		r.Use(handler.AuthMiddleware)
 		r.Get("/me", handler.Me)
+		r.Post("/auth/2fa/setup", handler.Setup2FA)
 	})
+
 	rt.Post("/auth/refresh", handler.Refresh)
 	rt.Post("/auth/logout", handler.Logout)
 

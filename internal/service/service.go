@@ -9,6 +9,8 @@ import (
 	"github.com/Fon911/sentinel/internal/storage"
 	"github.com/alexedwards/argon2id"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pquerna/otp"
+	"github.com/pquerna/otp/totp"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -186,4 +188,23 @@ func Logout(ctx context.Context, rdb *redis.Client, raw, secret string) error {
 	}
 
 	return nil
+}
+
+func Setup2FA(ctx context.Context, pool *pgxpool.Pool, userID int64) (*otp.Key, error) {
+	email, err := storage.GetEmailByID(ctx, pool, userID)
+	if err != nil {
+		return nil, err
+	}
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer:      "Sentinel",
+		AccountName: email,
+	})
+	if err != nil {
+		return nil, err
+	}
+	err = storage.SaveTOTPSecret(ctx, pool, userID, key.Secret())
+	if err != nil {
+		return nil, err
+	}
+	return key, nil
 }

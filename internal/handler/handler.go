@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"net/http"
 
 	"github.com/Fon911/sentinel/internal/service"
@@ -46,6 +47,25 @@ func Me(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(MeResponse{ID: userID})
+}
+
+func Setup2FA(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(userIDKey).(int64)
+	key, err := service.Setup2FA(r.Context(), Pool, userID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(w, "ошибка сервера")
+		return
+	}
+	img, err := key.Image(200, 200)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(w, "ошибка сервера")
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	png.Encode(w, img)
+
 }
 
 func Health(w http.ResponseWriter, r *http.Request) {

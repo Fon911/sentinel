@@ -14,4 +14,6 @@ type User struct {
 	Email         string
 	EmailVerified bool
 	CreatedAt     pgtype.Timestamptz
+	TotpSecret    pgtype.Text
+	TotpEnabled   bool
 }

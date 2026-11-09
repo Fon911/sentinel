@@ -7,6 +7,8 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createUser = `-- name: CreateUser :one
@@ -27,6 +29,19 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (int64, 
 	return id, err
 }
 
+const getEmailByID = `-- name: GetEmailByID :one
+SELECT email
+FROM users
+WHERE id = $1
+`
+
+func (q *Queries) GetEmailByID(ctx context.Context, id int64) (string, error) {
+	row := q.db.QueryRow(ctx, getEmailByID, id)
+	var email string
+	err := row.Scan(&email)
+	return email, err
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
 SELECT id,
   password_hash
@@ -44,4 +59,20 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (GetUserByEm
 	var i GetUserByEmailRow
 	err := row.Scan(&i.ID, &i.PasswordHash)
 	return i, err
+}
+
+const saveTOTPSecret = `-- name: SaveTOTPSecret :exec
+UPDATE users
+SET totp_secret = $2
+WHERE id = $1
+`
+
+type SaveTOTPSecretParams struct {
+	ID         int64
+	TotpSecret pgtype.Text
+}
+
+func (q *Queries) SaveTOTPSecret(ctx context.Context, arg SaveTOTPSecretParams) error {
+	_, err := q.db.Exec(ctx, saveTOTPSecret, arg.ID, arg.TotpSecret)
+	return err
 }

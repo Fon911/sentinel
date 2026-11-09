@@ -8,6 +8,7 @@ import (
 	"github.com/Fon911/sentinel/db"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -56,4 +57,30 @@ func GetUserByEmail(ctx context.Context, pool *pgxpool.Pool, email string) (id i
 	}
 
 	return row.ID, row.PasswordHash, nil
+}
+
+func GetEmailByID(ctx context.Context, pool *pgxpool.Pool, id int64) (string, error) {
+	q := db.New(pool)
+	email, err := q.GetEmailByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrUserNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("база сломалась: %w", err) // настоящий сбой
+
+	}
+	return email, nil
+
+}
+
+func SaveTOTPSecret(ctx context.Context, pool *pgxpool.Pool, id int64, secret string) error {
+	q := db.New(pool)
+	err := q.SaveTOTPSecret(ctx, db.SaveTOTPSecretParams{
+		ID:         id,
+		TotpSecret: pgtype.Text{String: secret, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("сохранение секрета упало: %w", err)
+	}
+	return nil
 }

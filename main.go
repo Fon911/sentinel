@@ -20,8 +20,9 @@ func main() {
 		r.Use(handler.AuthMiddleware)
 		r.Get("/me", handler.Me)
 		r.Post("/auth/2fa/setup", handler.Setup2FA)
+		r.Post("/auth/2fa/verify", handler.Verify2FA)
 	})
-
+	rt.Post("/auth/2fa/login", handler.TwoFALogin)
 	rt.Post("/auth/refresh", handler.Refresh)
 	rt.Post("/auth/logout", handler.Logout)
 

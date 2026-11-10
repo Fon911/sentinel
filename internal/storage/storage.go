@@ -44,19 +44,19 @@ func CreateUser(ctx context.Context, pool *pgxpool.Pool, email string, passwordH
 	return id, nil
 }
 
-func GetUserByEmail(ctx context.Context, pool *pgxpool.Pool, email string) (id int64, hash string, err error) {
+func GetUserByEmail(ctx context.Context, pool *pgxpool.Pool, email string) (id int64, hash string, enabled bool, err error) {
 	q := db.New(pool)
 	row, err := q.GetUserByEmail(ctx, email)
 	// Три исхода
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, "", ErrUserNotFound
+		return 0, "", false, ErrUserNotFound
 	}
 	if err != nil {
-		return 0, "", fmt.Errorf("база сломалась: %w", err) // настоящий сбой
+		return 0, "", false, fmt.Errorf("база сломалась: %w", err) // настоящий сбой
 
 	}
 
-	return row.ID, row.PasswordHash, nil
+	return row.ID, row.PasswordHash, row.TotpEnabled, nil
 }
 
 func GetEmailByID(ctx context.Context, pool *pgxpool.Pool, id int64) (string, error) {
@@ -81,6 +81,32 @@ func SaveTOTPSecret(ctx context.Context, pool *pgxpool.Pool, id int64, secret st
 	})
 	if err != nil {
 		return fmt.Errorf("сохранение секрета упало: %w", err)
+	}
+	return nil
+}
+
+func GetTOTP(ctx context.Context, pool *pgxpool.Pool, id int64) (secret string, enabled bool, err error) {
+	q := db.New(pool)
+	row, err := q.GetTOTPByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, ErrUserNotFound
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("база сломалась: %w", err) // настоящий сбой
+
+	}
+	return row.TotpSecret.String, row.TotpEnabled, nil
+}
+
+func SetTOTPEnabled(ctx context.Context, pool *pgxpool.Pool, id int64) error {
+	q := db.New(pool)
+	err := q.SetTOTPEnabled(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("база сломалась: %w", err) // настоящий сбой
+
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"strconv"
 	"time"
@@ -17,6 +18,7 @@ import (
 var ErrWeakPassword = errors.New("пароль короче 8 - отказ")
 var ErrEmailTaken = storage.ErrEmailTaken
 var ErrTokenReused = errors.New("Токен переиспользуеться те украден")
+var ErrInvalidCode = errors.New("код неверный")
 
 func Register(ctx context.Context, pool *pgxpool.Pool, email string, password string) (int64, error) {
 	if len(password) < 8 {
@@ -56,61 +58,55 @@ func addFailedAttempt(ctx context.Context, rdb *redis.Client, key string) error 
 	return nil
 }
 
-func Login(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, email, password, secret string) (string, string, error) {
+func Login(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, email, password, secret string) (string, string, string, error) {
 	key := "login_attempts:" + email
 	n, err := rdb.Get(ctx, key).Int()
 	if errors.Is(err, redis.Nil) {
 		// полки нет — неудач не было, едем дальше
 	} else if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if n >= 5 {
-		return "", "", ErrTooManyAttempts
+		return "", "", "", ErrTooManyAttempts
 	}
-	id, hash, err := storage.GetUserByEmail(ctx, pool, email)
+	id, hash, enabled, err := storage.GetUserByEmail(ctx, pool, email)
 	if errors.Is(err, storage.ErrUserNotFound) {
 		if err := addFailedAttempt(ctx, rdb, key); err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
-		return "", "", ErrInvalidCredentials
+		return "", "", "", ErrInvalidCredentials
 	}
+	if err != nil {
+		return "", "", "", err
+	}
+
 	match, err := argon2id.ComparePasswordAndHash(password, hash)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if !match {
 		if err := addFailedAttempt(ctx, rdb, key); err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
-		return "", "", ErrInvalidCredentials
+		return "", "", "", ErrInvalidCredentials
 	}
 	err = rdb.Del(ctx, key).Err()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-
-	token, err := CreateAccessToken(id, secret, accessTTL)
+	if enabled {
+		nonce := rand.Text()
+		err := rdb.Set(ctx, "2fa_pending:"+nonce, id, 5*time.Minute).Err()
+		if err != nil {
+			return "", "", "", err
+		}
+		return "", "", nonce, nil
+	}
+	access, refresh, err := issueTokens(ctx, rdb, id, secret)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	refresh, jti, err := CreateRefreshToken(id, secret, refreshTTL)
-	if err != nil {
-		return "", "", err
-	}
-	err = rdb.Set(ctx, "refresh:"+jti, id, refreshTTL).Err()
-	if err != nil {
-		return "", "", err
-	}
-	indexKey := "sessions:" + strconv.FormatInt(id, 10)
-	err = rdb.SAdd(ctx, indexKey, jti).Err()
-	if err != nil {
-		return "", "", err
-	}
-	err = rdb.Expire(ctx, indexKey, refreshTTL).Err()
-	if err != nil {
-		return "", "", err
-	}
-	return token, refresh, nil
+	return access, refresh, "", nil
 }
 
 func Refresh(ctx context.Context, rdb *redis.Client, raw, secret string) (string, string, error) {
@@ -149,27 +145,8 @@ func Refresh(ctx context.Context, rdb *redis.Client, raw, secret string) (string
 	if err != nil {
 		return "", "", err
 	}
-	newAccessToken, err := CreateAccessToken(userID, secret, accessTTL)
-	if err != nil {
-		return "", "", err
-	}
-	newRefreshToken, jti, err := CreateRefreshToken(userID, secret, refreshTTL)
-	if err != nil {
-		return "", "", err
-	}
-	err = rdb.Set(ctx, "refresh:"+jti, userID, refreshTTL).Err()
-	if err != nil {
-		return "", "", err
-	}
-	err = rdb.SAdd(ctx, indexKey, jti).Err()
-	if err != nil {
-		return "", "", err
-	}
-	err = rdb.Expire(ctx, indexKey, refreshTTL).Err()
-	if err != nil {
-		return "", "", err
-	}
-	return newAccessToken, newRefreshToken, nil
+	return issueTokens(ctx, rdb, userID, secret)
+
 }
 
 func Logout(ctx context.Context, rdb *redis.Client, raw, secret string) error {
@@ -207,4 +184,67 @@ func Setup2FA(ctx context.Context, pool *pgxpool.Pool, userID int64) (*otp.Key, 
 		return nil, err
 	}
 	return key, nil
+}
+
+func issueTokens(ctx context.Context, rdb *redis.Client, id int64, secret string) (string, string, error) {
+	token, err := CreateAccessToken(id, secret, accessTTL)
+	if err != nil {
+		return "", "", err
+	}
+	refresh, jti, err := CreateRefreshToken(id, secret, refreshTTL)
+	if err != nil {
+		return "", "", err
+	}
+	err = rdb.Set(ctx, "refresh:"+jti, id, refreshTTL).Err()
+	if err != nil {
+		return "", "", err
+	}
+	indexKey := "sessions:" + strconv.FormatInt(id, 10)
+	err = rdb.SAdd(ctx, indexKey, jti).Err()
+	if err != nil {
+		return "", "", err
+	}
+	err = rdb.Expire(ctx, indexKey, refreshTTL).Err()
+	if err != nil {
+		return "", "", err
+	}
+	return token, refresh, nil
+}
+
+func Verify2FA(ctx context.Context, pool *pgxpool.Pool, userID int64, code string) error {
+	secret, _, err := storage.GetTOTP(ctx, pool, userID)
+	if err != nil {
+		return err
+	}
+	if !totp.Validate(code, secret) {
+		return ErrInvalidCode
+	}
+	err = storage.SetTOTPEnabled(ctx, pool, userID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func Complete2FA(ctx context.Context, pool *pgxpool.Pool, rdb *redis.Client, pendingToken, code, jwtSecret string) (string, string, error) {
+	userID, err := rdb.Get(ctx, "2fa_pending:"+pendingToken).Int64()
+	if errors.Is(err, redis.Nil) {
+		return "", "", ErrInvalidToken
+	}
+	if err != nil {
+		return "", "", err
+	}
+	totpSecret, _, err := storage.GetTOTP(ctx, pool, userID)
+	if err != nil {
+		return "", "", err
+	}
+	if !totp.Validate(code, totpSecret) {
+		return "", "", ErrInvalidCode
+	}
+	err = rdb.Del(ctx, "2fa_pending:"+pendingToken).Err()
+	if err != nil {
+		return "", "", err
+	}
+	return issueTokens(ctx, rdb, userID, jwtSecret)
+
 }

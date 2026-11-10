@@ -42,9 +42,29 @@ func (q *Queries) GetEmailByID(ctx context.Context, id int64) (string, error) {
 	return email, err
 }
 
+const getTOTPByID = `-- name: GetTOTPByID :one
+SELECT totp_secret,
+  totp_enabled
+FROM users
+WHERE id = $1
+`
+
+type GetTOTPByIDRow struct {
+	TotpSecret  pgtype.Text
+	TotpEnabled bool
+}
+
+func (q *Queries) GetTOTPByID(ctx context.Context, id int64) (GetTOTPByIDRow, error) {
+	row := q.db.QueryRow(ctx, getTOTPByID, id)
+	var i GetTOTPByIDRow
+	err := row.Scan(&i.TotpSecret, &i.TotpEnabled)
+	return i, err
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
 SELECT id,
-  password_hash
+  password_hash,
+  totp_enabled
 FROM users
 WHERE email = $1
 `
@@ -52,12 +72,13 @@ WHERE email = $1
 type GetUserByEmailRow struct {
 	ID           int64
 	PasswordHash string
+	TotpEnabled  bool
 }
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (GetUserByEmailRow, error) {
 	row := q.db.QueryRow(ctx, getUserByEmail, email)
 	var i GetUserByEmailRow
-	err := row.Scan(&i.ID, &i.PasswordHash)
+	err := row.Scan(&i.ID, &i.PasswordHash, &i.TotpEnabled)
 	return i, err
 }
 
@@ -74,5 +95,16 @@ type SaveTOTPSecretParams struct {
 
 func (q *Queries) SaveTOTPSecret(ctx context.Context, arg SaveTOTPSecretParams) error {
 	_, err := q.db.Exec(ctx, saveTOTPSecret, arg.ID, arg.TotpSecret)
+	return err
+}
+
+const setTOTPEnabled = `-- name: SetTOTPEnabled :exec
+UPDATE users
+SET totp_enabled = TRUE
+WHERE id = $1
+`
+
+func (q *Queries) SetTOTPEnabled(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, setTOTPEnabled, id)
 	return err
 }

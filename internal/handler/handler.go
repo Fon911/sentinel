@@ -41,6 +41,18 @@ type MeResponse struct {
 type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
+type TwoFAResponse struct {
+	Required     bool   `json:"2fa_required"`
+	PendingToken string `json:"pending_token"`
+}
+type VerifyRequest struct {
+	Code string `json:"code"`
+}
+
+type TwoFALoginRequest struct {
+	PendingToken string `json:"pending_token"`
+	Code         string `json:"code"`
+}
 
 func Me(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(userIDKey).(int64)
@@ -66,6 +78,66 @@ func Setup2FA(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	png.Encode(w, img)
 
+}
+
+func Verify2FA(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(userIDKey).(int64)
+	var req VerifyRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "кривой JSON")
+		return
+	}
+	if req.Code == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "нужно поле code")
+		return
+	}
+	err = service.Verify2FA(r.Context(), Pool, userID, req.Code)
+	if errors.Is(err, service.ErrInvalidCode) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintln(w, "код неверны")
+		return
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func TwoFALogin(w http.ResponseWriter, r *http.Request) {
+	var req TwoFALoginRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "кривой JSON")
+		return
+	}
+	if req.Code == "" || req.PendingToken == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "нужно поле code или PendingToken")
+		return
+	}
+	access, refresh, err := service.Complete2FA(r.Context(), Pool, RDB, req.PendingToken, req.Code, Secret)
+	if errors.Is(err, service.ErrInvalidToken) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintln(w, "номерок невалиден или протух")
+		return
+	}
+	if errors.Is(err, service.ErrInvalidCode) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintln(w, "код неверный")
+		return
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(LoginResponse{AccessToken: access, RefreshToken: refresh})
 }
 
 func Health(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +200,13 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "нужно поле Email или Password")
 		return
 	}
-	access, refresh, err := service.Login(r.Context(), Pool, RDB, req.Email, req.Password, Secret)
+	access, refresh, pending, err := service.Login(r.Context(), Pool, RDB, req.Email, req.Password, Secret)
+	if pending != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(TwoFAResponse{Required: true, PendingToken: pending})
+		return
+	}
 	if errors.Is(err, service.ErrTooManyAttempts) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		fmt.Fprintln(w, "слишком много попыток, подожди 15 минут")
